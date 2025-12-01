@@ -34,7 +34,7 @@ public class MainMenuPanel extends JPanel {
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.gridx = 0;
         gbc.gridy = 0;
-        gbc.insets = new Insets(300, 0, 0, 0); // push slightly downward
+        gbc.insets = new Insets(300, 0, 0, 0);
         backgroundPanel.add(buttonColumn, gbc);
         add(backgroundPanel, BorderLayout.CENTER);
     }

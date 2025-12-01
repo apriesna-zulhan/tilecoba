@@ -67,7 +67,7 @@ public class NewGamePanel extends JPanel {
         card.add(backButton);
 
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(250, 40, 0, 40); // horizontal padding for card
+        gbc.insets = new Insets(250, 40, 0, 40);
         backgroundPanel.add(card, gbc);
         add(backgroundPanel, BorderLayout.CENTER);
     }
