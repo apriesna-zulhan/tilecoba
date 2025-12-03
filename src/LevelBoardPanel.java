@@ -10,6 +10,7 @@ public class LevelBoardPanel extends JPanel {
     private LevelConfig selectedLevel;
     private JPanel gridPanel;
     private JButton selectedButton;
+    private JLabel progressLabel;
 
     public LevelBoardPanel(GameLauncher launcher, LevelManager levelManager) {
         this.launcher = launcher;
@@ -23,10 +24,26 @@ public class LevelBoardPanel extends JPanel {
         BackgroundPanel backgroundPanel = new BackgroundPanel("levelboard_bg.png");
         backgroundPanel.setLayout(new BorderLayout());
 
+        JPanel topPanel = new JPanel();
+        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
+        topPanel.setOpaque(false);
+        topPanel.setBorder(BorderFactory.createEmptyBorder(24, 0, 16, 0));
+
         JLabel title = new JLabel("LEVEL BOARD", SwingConstants.CENTER);
         title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
-        title.setBorder(BorderFactory.createEmptyBorder(24, 0, 16, 0));
-        backgroundPanel.add(title, BorderLayout.NORTH);
+        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+        
+        // Progress summary for ALL levels
+        progressLabel = new JLabel("", SwingConstants.CENTER);
+        progressLabel.setFont(progressLabel.getFont().deriveFont(Font.PLAIN, 14f));
+        progressLabel.setForeground(new Color(0xFF6B35));
+        progressLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        
+        topPanel.add(title);
+        topPanel.add(Box.createVerticalStrut(8));
+        topPanel.add(progressLabel);
+        
+        backgroundPanel.add(topPanel, BorderLayout.NORTH);
 
         JPanel centerWrapper = new JPanel(new GridBagLayout());
         centerWrapper.setOpaque(false);
@@ -50,6 +67,19 @@ public class LevelBoardPanel extends JPanel {
     public void setActiveUser(User activeUser) {
         this.activeUser = Objects.requireNonNull(activeUser, "User diperlukan untuk membuka level board");
         reloadLevels();
+        updateProgressLabel();
+    }
+
+    /**
+     * Show ALL saved progress across all levels
+     */
+    private void updateProgressLabel() {
+        if (activeUser != null) {
+            String summary = launcher.getUserManager().getLevelProgressSummary(activeUser.getId());
+            progressLabel.setText(summary);
+        } else {
+            progressLabel.setText("");
+        }
     }
 
     private void reloadLevels() {
@@ -63,6 +93,15 @@ public class LevelBoardPanel extends JPanel {
             for (LevelConfig config : levels) {
                 if (config.getId() <= unlocked) {
                     JButton levelButton = buildLevelButton(config);
+                    
+                    // Highlight levels with saved progress
+                    int savedRound = launcher.getUserManager().getSavedRound(
+                        activeUser.getId(), config.getId());
+                    if (savedRound > 1) {
+                        levelButton.setBorder(BorderFactory.createLineBorder(
+                            new Color(0xFF6B35), 3));
+                    }
+                    
                     gridPanel.add(levelButton);
                     if (selectedLevel == null) {
                         selectedLevel = config;

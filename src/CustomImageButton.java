@@ -1,5 +1,4 @@
 import javax.swing.*;
-import java.awt.*;
 import java.awt.event.*;
 
 public class CustomImageButton extends JButton {
@@ -17,7 +16,6 @@ public class CustomImageButton extends JButton {
         setContentAreaFilled(false);
         setFocusPainted(false);
 
-        // Hover handling
         addMouseListener(new MouseAdapter() {
             @Override
             public void mouseEntered(MouseEvent e) {

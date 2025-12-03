@@ -15,6 +15,12 @@ public class MainMenuPanel extends JPanel {
         Dimension uniform = new Dimension(240, 70);
         CustomImageButton newGameButton = new CustomImageButton("assets/ng.png", "assets/ngh.png", "assets/ngp.png");
         CustomImageButton continueButton = new CustomImageButton("assets/rs.png", "assets/rsh.png", "assets/rsp.png");
+        
+        JButton leaderboardButton = new JButton("🏆 Leaderboard");
+        leaderboardButton.setFont(new Font("Itim", Font.BOLD, 16));
+        leaderboardButton.setPreferredSize(uniform);
+        leaderboardButton.setFocusPainted(false);
+        
         CustomImageButton quitButton = new CustomImageButton("assets/quit.png", "assets/quith.png", "assets/quitp.png");
 
         newGameButton.setPreferredSize(uniform);
@@ -23,11 +29,14 @@ public class MainMenuPanel extends JPanel {
 
         newGameButton.addActionListener(e -> launcher.showNewGame());
         continueButton.addActionListener(e -> launcher.showContinue());
+        leaderboardButton.addActionListener(e -> launcher.showLeaderboard());
         quitButton.addActionListener(e -> System.exit(0));
 
         buttonColumn.add(newGameButton);
         buttonColumn.add(Box.createVerticalStrut(10));
         buttonColumn.add(continueButton);
+        buttonColumn.add(Box.createVerticalStrut(10));
+        buttonColumn.add(leaderboardButton); // NEW
         buttonColumn.add(Box.createVerticalStrut(10));
         buttonColumn.add(quitButton);
 

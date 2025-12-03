@@ -6,7 +6,7 @@ public class BackgroundPanel extends JPanel {
 
     public BackgroundPanel(String imagePath) {
         backgroundImage = new ImageIcon("assets/" + imagePath).getImage();
-        setLayout(null); // supaya bebas menaruh button di atasnya
+        setLayout(null); 
     }
 
     @Override
@@ -17,7 +17,6 @@ public class BackgroundPanel extends JPanel {
         int imgWidth = backgroundImage.getWidth(null);
         int imgHeight = backgroundImage.getHeight(null);
 
-        // Scale proporsional berdasarkan lebar window
         double scale = (double) panelWidth / imgWidth;
         int scaledWidth = panelWidth;
         int scaledHeight = (int) (imgHeight * scale);

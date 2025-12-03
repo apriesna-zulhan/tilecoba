@@ -15,7 +15,7 @@ public class NewGamePanel extends JPanel {
         buildUI();
     }
 
-    private void buildUI() {
+    private void buildUI() {    
         setLayout(new BorderLayout());
 
         BackgroundPanel backgroundPanel = new BackgroundPanel("newgame_bg.png");
