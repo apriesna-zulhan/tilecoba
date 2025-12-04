@@ -1,26 +1,40 @@
 import javax.swing.*;
+import javax.swing.Timer;
 import java.awt.*;
 import java.awt.event.ActionListener;
-import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.*;
 import java.util.List;
-import java.util.Set;
+import java.util.Queue;
 
 public class GameplayPanel extends JPanel {
     private final GameLauncher launcher;
     private final LevelManager levelManager;
+    private User currentUser;
     private LevelConfig levelConfig;
     private int currentRound = 1;
     private int totalRounds = 6;
-    private StopwatchTimer stopwatchTimer = new StopwatchTimer();
+    
+    private Timer countdownTimer;
+    private int remainingSeconds = 30;
+    private static final int ROUND_TIME_LIMIT = 30;
+    
+    private long levelScore = 0; 
+    private static final long WIN_POINTS = 100; 
+    private static final long FAIL_PENALTY = 25; 
+    private static final long MIN_SCORE_TO_UNLOCK = 300; 
+    
+    private int currentSteps = 0;
+    private int totalHazardTouches = 0;
+    private long roundStartTime = 0;
 
     private final JPanel hudPanel = new JPanel(new BorderLayout());
     private final JPanel hudContainer = new JPanel(new GridBagLayout());
-    private final JLabel timerLabel = new JLabel("00:00");
+    private final JLabel timerLabel = new JLabel("10");
     private final JLabel roundLabel = new JLabel("Round 1");
     private final JLabel scoreLabel = new JLabel("Score: 0");
     private final JButton pauseButton = new JButton(new ImageIcon("assets/pause.png"));
     private boolean paused = false;
+    private boolean isShowingDialog = false;
 
     private JPanel boardWrapper;
     private JPanel gridPanel;
@@ -51,8 +65,8 @@ public class GameplayPanel extends JPanel {
         hudPanel.setOpaque(false);
         hudContainer.setOpaque(false);
 
-        timerLabel.setForeground(new Color(0x1F6D8C));
-        timerLabel.setFont(timerLabel.getFont().deriveFont(Font.BOLD, 18f));
+        timerLabel.setForeground(new Color(0xFF0000));
+        timerLabel.setFont(timerLabel.getFont().deriveFont(Font.BOLD, 24f));
         roundLabel.setForeground(new Color(0x1F6D8C));
         roundLabel.setFont(roundLabel.getFont().deriveFont(Font.BOLD, 18f));
         scoreLabel.setForeground(new Color(0x1F6D8C));
@@ -66,6 +80,7 @@ public class GameplayPanel extends JPanel {
 
         JPanel leftBox = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
         leftBox.setOpaque(false);
+        leftBox.add(new JLabel("Time: "));
         leftBox.add(timerLabel);
 
         JPanel centerBox = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 6));
@@ -100,21 +115,207 @@ public class GameplayPanel extends JPanel {
         backgroundPanel.add(boardWrapper, BorderLayout.CENTER);
 
         add(backgroundPanel, BorderLayout.CENTER);
-
-        // Update timer label periodically.
-        new Timer(500, e -> timerLabel.setText(formatElapsed())).start();
     }
 
-    public void loadLevel(LevelConfig config, int roundCount) {
+    public void loadLevel(LevelConfig config, int roundCount, User user) {
         this.levelConfig = config;
         this.totalRounds = roundCount;
-        this.currentRound = 1;
-        stopwatchTimer.reset();
-        stopwatchTimer.start();
+        this.currentUser = user;
+        this.totalHazardTouches = 0;
+        
+        int maxLevelInDB = levelManager.getMaxLevelInDatabase();
+        int currentUnlockedLevel = Math.min(user.getUnlockedLevel(), maxLevelInDB);
+        
+        if (user.getUnlockedLevel() > maxLevelInDB) {
+            System.out.println("WARNING - User unlocked level (" + user.getUnlockedLevel() + 
+                            ") exceeds max level in DB (" + maxLevelInDB + "). Fixing...");
+            launcher.getUserManager().updateUnlockedLevel(user.getId(), maxLevelInDB);
+            currentUnlockedLevel = maxLevelInDB;
+            
+            User updatedUser = launcher.getUserManager().getUserById(user.getId());
+            if (updatedUser != null) {
+                this.currentUser = updatedUser;
+            }
+        }
+        
+        boolean isHighestLevel = (config.getId() == currentUnlockedLevel);
+        
+        System.out.println("DEBUG - Current Level: " + config.getId());
+        System.out.println("DEBUG - Max Level in DB: " + maxLevelInDB);
+        System.out.println("DEBUG - Unlocked Level (corrected): " + currentUnlockedLevel);
+        System.out.println("DEBUG - Is Highest Level: " + isHighestLevel);
+        
+        int savedRound = launcher.getUserManager().getSavedRound(user.getId(), config.getId());
+        long tempScore = launcher.getUserManager().getTempScore(user.getId(), config.getId());
+        
+        if (savedRound > 1) {
+            int choice = JOptionPane.showConfirmDialog(this,
+                "Kamu memiliki progress tersimpan di Level " + config.getId() + 
+                ", Round " + savedRound + ".\n" +
+                "Current Score: " + tempScore + "\n" +
+                "Lanjutkan dari round tersebut?",
+                "Resume Progress",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE);
+            
+            if (choice == JOptionPane.YES_OPTION) {
+                this.currentRound = savedRound;
+                this.levelScore = tempScore;
+            } else {
+                this.currentRound = 1;
+                this.levelScore = 0;
+                launcher.getUserManager().resetLevelProgress(user.getId(), config.getId());
+                launcher.getUserManager().updateTempScore(user.getId(), config.getId(), 0);
+            }
+        } else {
+            this.currentRound = 1;
+            this.levelScore = 0;
+        }
+        
         roundLabel.setText("Round " + currentRound);
+        scoreLabel.setText("Score: " + levelScore);
         buildGrid();
         prepareRound();
     }
+
+   private void handleLevelComplete() {
+        boolean canUnlock = levelScore >= MIN_SCORE_TO_UNLOCK;
+        
+        int maxLevelInDB = levelManager.getMaxLevelInDatabase();
+        int currentUnlockedLevel = Math.min(currentUser.getUnlockedLevel(), maxLevelInDB);
+        
+        int nextLevelId = currentUnlockedLevel + 1;
+        boolean hasNextLevel = (nextLevelId <= maxLevelInDB);
+        
+        if (hasNextLevel) {
+            LevelConfig nextLevelCheck = levelManager.loadLevel(nextLevelId);
+            hasNextLevel = (nextLevelCheck != null && nextLevelCheck.getId() == nextLevelId);
+        }
+        
+        boolean isHighestLevel = (levelConfig.getId() == currentUnlockedLevel);
+        
+        boolean isLastLevelInDB = (levelConfig.getId() == maxLevelInDB);
+        
+        System.out.println("DEBUG - Current Level: " + levelConfig.getId());
+        System.out.println("DEBUG - Max Level in DB: " + maxLevelInDB);
+        System.out.println("DEBUG - Unlocked Level (corrected): " + currentUnlockedLevel);
+        System.out.println("DEBUG - Is Highest Level: " + isHighestLevel);
+        System.out.println("DEBUG - Is Last Level in DB: " + isLastLevelInDB);
+        
+        if (currentUser != null) {
+            if (isLastLevelInDB) {
+                launcher.getUserManager().saveLevelScoreRepeatable(
+                    currentUser.getId(), 
+                    levelConfig.getId(), 
+                    levelScore
+                );
+                
+                System.out.println("DEBUG - Repeatable Score! Added +" + levelScore + 
+                                " to total (Level " + levelConfig.getId() + ")");
+            } 
+            else if (isHighestLevel) {
+                launcher.getUserManager().saveLevelScore(
+                    currentUser.getId(), 
+                    levelConfig.getId(), 
+                    levelScore
+                );
+                
+                System.out.println("DEBUG - Normal Score! Replaced score with " + levelScore + 
+                                " (Level " + levelConfig.getId() + ")");
+            }
+            
+            launcher.getUserManager().resetLevelProgress(
+                currentUser.getId(),
+                levelConfig.getId()
+            );
+            
+            User updatedUser = launcher.getUserManager().getUserById(currentUser.getId());
+            if (updatedUser != null) {
+                currentUser = updatedUser;
+            }
+        
+            if (canUnlock && isHighestLevel && hasNextLevel) {
+                launcher.getUserManager().updateUnlockedLevel(currentUser.getId(), nextLevelId);
+                
+                updatedUser = launcher.getUserManager().getUserById(currentUser.getId());
+                if (updatedUser != null) {
+                    currentUser = updatedUser;
+                }
+                
+                JOptionPane.showMessageDialog(this, 
+                    "🎉 LEVEL CLEAR! 🎉\n\n" +
+                    "Level Score: " + levelScore + "\n" +
+                    "Total Score: " + updatedUser.getTotalScore() + "\n" +
+                    "Level berikutnya terbuka!",
+                    "Level Complete",
+                    JOptionPane.INFORMATION_MESSAGE);
+            } 
+            else if (canUnlock && isHighestLevel && !hasNextLevel && isLastLevelInDB) {
+                JOptionPane.showMessageDialog(this, 
+                    "🎉 FINAL LEVEL CLEAR! 🎉\n\n" +
+                    "Level Score: " + levelScore + "\n" +
+                    "Total Score: " + updatedUser.getTotalScore() + "\n\n" +
+                    "⭐ LEVEL TERAKHIR - REPEATABLE! ⭐\n" +
+                    "Kamu bisa main level ini berulang kali!\n" +
+                    "Score akan TERUS BERTAMBAH setiap permainan!\n\n" +
+                    "✨ Main lagi untuk farming score!",
+                    "All Levels Complete",
+                    JOptionPane.INFORMATION_MESSAGE);
+            }
+            else if (!canUnlock) {
+                String message = "❌ Level Tidak Selesai!\n\n" +
+                    "Your Score: " + levelScore + "\n" +
+                    "Minimal Score: " + MIN_SCORE_TO_UNLOCK + "\n" +
+                    "Kurang: " + (MIN_SCORE_TO_UNLOCK - levelScore) + " points\n\n";
+                
+                if (isHighestLevel || isLastLevelInDB) {
+                    if (isLastLevelInDB) {
+                        message += "⚠️ Score sudah tersimpan di leaderboard.\n" +
+                                "🔄 Ini level terakhir - main lagi untuk farming score!";
+                    } else {
+                        message += "⚠️ Score sudah tersimpan di leaderboard.\n" +
+                                "Coba lagi untuk unlock level berikutnya!";
+                    }
+                } else {
+                    message += "Level ini bukan level tertinggimu.\nScore tidak dihitung di leaderboard.";
+                }
+                
+                JOptionPane.showMessageDialog(this, message, "Level Failed", JOptionPane.WARNING_MESSAGE);
+            } 
+            else if (isLastLevelInDB) {
+                JOptionPane.showMessageDialog(this,
+                    "✅ Level Terakhir Clear! 🔄\n\n" +
+                    "Score Gained: +" + levelScore + "\n" +
+                    "Total Score: " + updatedUser.getTotalScore() + "\n\n" +
+                    "⭐ REPEATABLE MODE AKTIF! ⭐\n" +
+                    "Score DITAMBAHKAN ke total (bukan di-replace)!\n" +
+                    "Main lagi untuk terus farming score!",
+                    "Last Level Complete (Farming Mode)",
+                    JOptionPane.INFORMATION_MESSAGE);
+            }
+            else if (isHighestLevel) {
+                JOptionPane.showMessageDialog(this,
+                    "✅ Level Clear! (Updated)\n\n" +
+                    "Level Score: " + levelScore + "\n" +
+                    "Total Score: " + updatedUser.getTotalScore() + "\n\n" +
+                    "✨ Score updated di leaderboard!",
+                    "Level Complete",
+                    JOptionPane.INFORMATION_MESSAGE);
+            } 
+            else {
+                JOptionPane.showMessageDialog(this,
+                    "✅ Level Clear!\n\n" +
+                    "Level Score: " + levelScore + "\n" +
+                    "Total Score: " + updatedUser.getTotalScore() + "\n\n" +
+                    "⚠️ Score tidak ditambahkan (bukan level tertinggi)",
+                    "Level Complete (No Score Update)",
+                    JOptionPane.INFORMATION_MESSAGE);
+            }
+        }
+        
+        launcher.showLevelBoardCurrent();
+    }
+
 
     private void buildGrid() {
         boardWrapper.removeAll();
@@ -144,14 +345,15 @@ public class GameplayPanel extends JPanel {
         boardWrapper.repaint();
     }
 
-    private JButton createTileButton(int row, int col) {
-        JButton button = new JButton(defaultIcon);
-        button.setBorderPainted(false);
-        button.setContentAreaFilled(false);
-        button.setFocusPainted(false);
-        button.setMargin(new Insets(0, 0, 0, 0));
-        button.addActionListener(tileClickHandler(row, col));
-        return button;
+        private JButton createTileButton(int row, int col) {
+            JButton button = new JButton(defaultIcon);
+            button.setBorderPainted(false);
+            button.setContentAreaFilled(false);
+            button.setFocusPainted(false);
+            button.setMargin(new Insets(0, 0, 0, 0));
+            
+            button.addActionListener(tileClickHandler(row, col));
+            return button;
     }
 
     private ActionListener tileClickHandler(int row, int col) {
@@ -159,16 +361,35 @@ public class GameplayPanel extends JPanel {
     }
 
     private void prepareRound() {
-        hazards = levelManager.generateDangerousTiles(levelConfig);
-        endpoints = levelManager.generateTwoBluePoints(levelConfig, hazards);
+        stopAllTimers();
+        
+        int maxAttempts = 100;
+        boolean validSetup = false;
+        
+        for (int attempt = 0; attempt < maxAttempts && !validSetup; attempt++) {
+            hazards = levelManager.generateDangerousTiles(levelConfig);
+            endpoints = levelManager.generateTwoBluePoints(levelConfig, hazards);
+            
+            if (hasValidPath(endpoints.get(0), endpoints.get(1), hazards)) {
+                validSetup = true;
+            }
+        }
+        
+        if (!validSetup) {
+            hazards.clear();
+            endpoints = levelManager.generateTwoBluePoints(levelConfig, hazards);
+        }
+        
         pathPoints.clear();
+        currentSteps = 0;
+        roundStartTime = System.currentTimeMillis();
+        
+        setTilesEnabled(false);
+        
         showHazards = true;
         showEndpoints = false;
         refreshTiles();
 
-        if (hazardPreviewTimer != null) {
-            hazardPreviewTimer.stop();
-        }
         hazardPreviewTimer = new Timer(1200, e -> {
             showHazards = false;
             ((Timer) e.getSource()).stop();
@@ -178,84 +399,254 @@ public class GameplayPanel extends JPanel {
         hazardPreviewTimer.setRepeats(false);
         hazardPreviewTimer.start();
     }
+    
+    private void stopAllTimers() {
+        if (hazardPreviewTimer != null && hazardPreviewTimer.isRunning()) {
+            hazardPreviewTimer.stop();
+        }
+        if (endpointRevealTimer != null && endpointRevealTimer.isRunning()) {
+            endpointRevealTimer.stop();
+        }
+        if (countdownTimer != null && countdownTimer.isRunning()) {
+            countdownTimer.stop();
+        }
+    }
+    
+    private void setTilesEnabled(boolean enabled) {
+        if (tileButtons == null) return;
+        int rows = levelConfig.getGridRows();
+        int cols = levelConfig.getGridCols();
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                tileButtons[r][c].setEnabled(enabled);
+            }
+        }
+    }
+    
+    private boolean hasValidPath(Point start, Point end, Set<Point> obstacles) {
+        if (start.equals(end)) return true;
+        
+        int rows = levelConfig.getGridRows();
+        int cols = levelConfig.getGridCols();
+        
+        Queue<Point> queue = new LinkedList<>();
+        Set<Point> visited = new HashSet<>();
+        
+        queue.offer(start);
+        visited.add(start);
+        
+        int[][] directions = {{0,1}, {1,0}, {0,-1}, {-1,0}};
+        
+        while (!queue.isEmpty()) {
+            Point current = queue.poll();
+            
+            for (int[] dir : directions) {
+                int newX = current.x + dir[0];
+                int newY = current.y + dir[1];
+                Point next = new Point(newX, newY);
+                
+                if (newX < 0 || newX >= cols || newY < 0 || newY >= rows) continue;
+                if (visited.contains(next) || obstacles.contains(next)) continue;
+                if (next.equals(end)) return true;
+                
+                visited.add(next);
+                queue.offer(next);
+            }
+        }
+        
+        return false;
+    }
 
     private void startEndpointReveal() {
-        if (endpointRevealTimer != null) {
+        if (endpointRevealTimer != null && endpointRevealTimer.isRunning()) {
             endpointRevealTimer.stop();
         }
         endpointRevealTimer = new Timer(200, e -> {
             showEndpoints = true;
             ((Timer) e.getSource()).stop();
+            
+            setTilesEnabled(true);
+            
+            startCountdown();
             refreshTiles();
         });
         endpointRevealTimer.setRepeats(false);
         endpointRevealTimer.start();
     }
-
-    private void refreshTiles() {
-        if (tileButtons == null || levelConfig == null) {
-            return;
+    
+    private void startCountdown() {
+        remainingSeconds = ROUND_TIME_LIMIT;
+        timerLabel.setText(String.valueOf(remainingSeconds));
+        timerLabel.setForeground(new Color(0xFF0000));
+        
+        if (countdownTimer != null) {
+            countdownTimer.stop();
         }
-        int rows = levelConfig.getGridRows();
-        int cols = levelConfig.getGridCols();
-        for (int r = 0; r < rows; r++) {
-            for (int c = 0; c < cols; c++) {
-                Point p = new Point(c, r);
-                JButton btn = tileButtons[r][c];
+        
+        countdownTimer = new Timer(1000, e -> {
+            remainingSeconds--;
+            timerLabel.setText(String.valueOf(remainingSeconds));
+            
+            if (remainingSeconds <= 3) {
+                timerLabel.setForeground(new Color(0xFF0000));
+            } else if (remainingSeconds <= 5) {
+                timerLabel.setForeground(Color.ORANGE);
+            } else {
+                timerLabel.setForeground(new Color(0xFF0000));
+            }
+            
+            if (remainingSeconds <= 0) {
+                countdownTimer.stop();
+                handleTimeOut();
+            }
+        });
+        countdownTimer.start();
+    }
+    
+    private void stopCountdown() {
+        if (countdownTimer != null) {
+            countdownTimer.stop();
+        }
+    }
+    
+    private void handleTimeOut() {
+        setTilesEnabled(false);
+        
+        levelScore -= FAIL_PENALTY;
+        scoreLabel.setText("Score: " + levelScore);
+        
+        JOptionPane.showMessageDialog(this, 
+            "⏰ Waktu habis! -" + FAIL_PENALTY + " points\n" +
+            "Current Score: " + levelScore + "\n" +
+            "Ulangi round ini.",
+            "Time Out",
+            JOptionPane.WARNING_MESSAGE);
+        
+        prepareRound();
+    }
 
-                if (showHazards && hazards.contains(p)) {
-                    btn.setIcon(hazardIcon);
-                } else if (showEndpoints && endpoints.contains(p)) {
-                    boolean pressedEndpoint = pathPoints.contains(p);
-                    btn.setIcon(pressedEndpoint ? pointPressedIcon : pointDefaultIcon);
-                } else if (pathPoints.contains(p)) {
-                    btn.setIcon(pressedIcon);
-                } else {
-                    btn.setIcon(defaultIcon);
-                }
+private void refreshTiles() {
+    if (tileButtons == null || levelConfig == null) {
+        return;
+    }
+    int rows = levelConfig.getGridRows();
+    int cols = levelConfig.getGridCols();
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            Point p = new Point(c, r);
+            JButton btn = tileButtons[r][c];
+
+            if (showHazards && hazards.contains(p)) {
+                btn.setIcon(hazardIcon);
+            } else if (showEndpoints && endpoints.contains(p)) {
+                boolean pressedEndpoint = pathPoints.contains(p);
+                btn.setIcon(pressedEndpoint ? pointPressedIcon : pointDefaultIcon);
+            } else if (pathPoints.contains(p)) {
+                btn.setIcon(pressedIcon);
+            } else {
+                btn.setIcon(defaultIcon);
+            }
+            
+            btn.setDisabledIcon(btn.getIcon());
+        }
+    }
+    
+    gridPanel.revalidate();
+    gridPanel.repaint();
+}
+
+    private void pauseGame() {
+        if (!paused && countdownTimer != null) {
+            countdownTimer.stop();
+            paused = true;
+            
+            if (currentUser != null && levelConfig != null) {
+                launcher.getUserManager().saveCurrentProgress(
+                    currentUser.getId(), 
+                    levelConfig.getId(), 
+                    currentRound
+                );
             }
         }
     }
 
-    private String formatElapsed() {
-        int seconds = stopwatchTimer.getElapsedSeconds();
-        int m = seconds / 60;
-        int s = seconds % 60;
-        return String.format("%02d:%02d", m, s);
-    }
-
-    private void pauseGame() {
-        if (!paused) {
-            stopwatchTimer.stop();
-            paused = true;
-        }
-    }
-
     private void resumeGame() {
-        if (paused) {
-            stopwatchTimer.start();
+        if (paused && remainingSeconds > 0) {
             paused = false;
+            if (countdownTimer != null) {
+                countdownTimer.start();
+            }
         }
     }
 
     public void handleTileClick(int row, int col) {
-        if (levelConfig == null || !showEndpoints) {
+        if (levelConfig == null) {
+            System.out.println("DEBUG: levelConfig is null");
             return;
         }
+        if (!showEndpoints) {
+            System.out.println("DEBUG: Endpoints not shown yet");
+            return;
+        }
+        if (paused) {
+            System.out.println("DEBUG: Game is paused");
+            return;
+        }
+        if (isShowingDialog) {
+            System.out.println("DEBUG: Dialog is showing");
+            return;
+        }
+        
         Point gridPoint = new Point(col, row);
         if (hazards.contains(gridPoint)) {
-            JOptionPane.showMessageDialog(this, "Kena hazard! Ulangi ronde.");
+            isShowingDialog = true;
+            setTilesEnabled(false);
+            totalHazardTouches++;
+            levelScore -= FAIL_PENALTY;
+            scoreLabel.setText("Score: " + levelScore);
+            
+            stopCountdown();
+            JOptionPane.showMessageDialog(this, 
+                "💥 Kena hazard! -" + FAIL_PENALTY + " points\n" +
+                "Current Score: " + levelScore + "\n" +
+                "Ulangi round ini.",
+                "Hazard Hit",
+                JOptionPane.WARNING_MESSAGE);
+            
+            isShowingDialog = false;
             prepareRound();
             return;
         }
-        if (!pathPoints.contains(gridPoint)) {
-            pathPoints.add(gridPoint);
+        
+        if (pathPoints.contains(gridPoint)) {
+            return;
         }
+        
+        if (!pathPoints.isEmpty()) {
+            Point lastPoint = pathPoints.get(pathPoints.size() - 1);
+            if (!isAdjacent(lastPoint, gridPoint)) {
+                return;
+            }
+        } else {
+            if (!endpoints.contains(gridPoint)) {
+                return;
+            }
+        }
+        
+        pathPoints.add(gridPoint);
+        currentSteps++;
         refreshTiles();
 
         if (checkRoundComplete()) {
+            stopCountdown();
             completeCurrentRound();
         }
+    }
+    
+    private boolean isAdjacent(Point p1, Point p2) {
+        int dx = Math.abs(p1.x - p2.x);
+        int dy = Math.abs(p1.y - p2.y);
+        return (dx == 1 && dy == 0) || (dx == 0 && dy == 1);
     }
 
     public boolean checkConnected() {
@@ -265,36 +656,65 @@ public class GameplayPanel extends JPanel {
         return pathPoints.containsAll(endpoints);
     }
 
-    public boolean checkHazardCollision() {
-        if (hazards == null) {
-            return false;
-        }
-        for (Point p : pathPoints) {
-            if (hazards.contains(p)) {
-                return true;
+    public boolean checkPathContinuous() {
+        if (pathPoints.size() < 2) return true;
+        
+        for (int i = 0; i < pathPoints.size() - 1; i++) {
+            if (!isAdjacent(pathPoints.get(i), pathPoints.get(i + 1))) {
+                return false;
             }
         }
-        return false;
+        return true;
     }
 
     public boolean checkRoundComplete() {
-        return checkConnected() && !checkHazardCollision();
+        return checkConnected() && checkPathContinuous();
     }
 
     private void completeCurrentRound() {
+        long roundElapsedMs = System.currentTimeMillis() - roundStartTime;
+        levelScore += WIN_POINTS;
+        scoreLabel.setText("Score: " + levelScore);
+        
+        if (currentUser != null) {
+            launcher.getUserManager().recordRoundResult(
+                currentUser.getId(),
+                levelConfig.getId(),
+                currentRound,
+                roundElapsedMs,
+                WIN_POINTS, 
+                currentSteps,
+                totalHazardTouches
+            );
+            
+            launcher.getUserManager().updateTempScore(
+                currentUser.getId(),
+                levelConfig.getId(),
+                levelScore
+            );
+            
+            launcher.getUserManager().saveCurrentProgress(
+                currentUser.getId(),
+                levelConfig.getId(),
+                currentRound + 1
+            );
+        }
+       
         if (currentRound >= totalRounds) {
-            stopwatchTimer.stop();
-            JOptionPane.showMessageDialog(this, "Level clear! Time: " + stopwatchTimer.getElapsedSeconds() + "s");
-            launcher.showMainMenu();
+            stopCountdown();
+            handleLevelComplete();
             return;
         }
+       
         currentRound++;
         roundLabel.setText("Round " + currentRound);
         prepareRound();
     }
+    
 
-    public void advanceRound() {
-        completeCurrentRound();
+    public void cleanup() {
+        stopAllTimers();
+        setTilesEnabled(false);
     }
 
     private void showPauseOverlay() {
@@ -323,8 +743,9 @@ public class GameplayPanel extends JPanel {
         CustomImageButton menuBtn = new CustomImageButton("assets/mainmenu.png", "assets/mainmenuh.png",
                 "assets/mainmenup.png");
         menuBtn.addActionListener(e -> {
+            cleanup();
             dialog.dispose();
-            launcher.showLevelBoardCurrent();
+            launcher.showMainMenu();
         });
 
         JPanel buttons = new JPanel();
